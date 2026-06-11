@@ -1,0 +1,222 @@
+[
+  {
+    "video": 1,
+    "source_video": "20260211_7605475540979567892.mp4",
+    "tiktok_url": "https://www.tiktok.com/@vanjao.plays/video/7605475540979567892",
+    "transcript": "So my point was right at the end where i said you can categorize art by whether it has political",
+    "word_count": 20,
+    "abs_mean": [
+      0.104535,
+      0.101124,
+      0.103809,
+      0.125631,
+      0.12128,
+      0.118594
+    ],
+    "signed_mean": [
+      0.037342,
+      -0.006922,
+      -0.015695,
+      -0.033118,
+      -0.033206,
+      0.049112
+    ],
+    "peak_second": 3,
+    "peak_abs_mean": 0.125631,
+    "largest_upward_change_to_second": 3,
+    "largest_upward_change": 0.021823,
+    "relative_jump_pct": 21.0,
+    "words": [
+      [
+        "So",
+        0.514,
+        0.635
+      ],
+      [
+        "my",
+        0.655,
+        0.756
+      ],
+      [
+        "point",
+        0.796,
+        1.018
+      ],
+      [
+        "was",
+        1.038,
+        1.139
+      ],
+      [
+        "right",
+        1.159,
+        1.32
+      ],
+      [
+        "at",
+        1.36,
+        1.401
+      ],
+      [
+        "the",
+        1.441,
+        1.521
+      ],
+      [
+        "end",
+        1.602,
+        1.723
+      ],
+      [
+        "where",
+        1.783,
+        1.944
+      ],
+      [
+        "I",
+        2.005,
+        2.085
+      ],
+      [
+        "said",
+        2.166,
+        2.367
+      ],
+      [
+        "you",
+        2.529,
+        2.629
+      ],
+      [
+        "can",
+        2.649,
+        2.75
+      ],
+      [
+        "categorize",
+        2.79,
+        3.334
+      ],
+      [
+        "art",
+        3.455,
+        3.596
+      ],
+      [
+        "by",
+        3.717,
+        3.999
+      ],
+      [
+        "whether",
+        4.24,
+        4.482
+      ],
+      [
+        "it",
+        4.522,
+        4.563
+      ],
+      [
+        "has",
+        4.603,
+        4.724
+      ],
+      [
+        "political",
+        4.764,
+        5.026
+      ]
+    ]
+  },
+  {
+    "video": 2,
+    "source_video": "20260211_7605476275284774165.mp4",
+    "tiktok_url": "https://www.tiktok.com/@vanjao.plays/video/7605476275284774165",
+    "transcript": "So the reason i say it's qualitative is because it's either or",
+    "word_count": 12,
+    "abs_mean": [
+      0.10157,
+      0.114113,
+      0.110061,
+      0.109672,
+      0.108572,
+      0.151075
+    ],
+    "signed_mean": [
+      0.016253,
+      -0.034358,
+      -0.045875,
+      -0.052677,
+      -0.043619,
+      0.056486
+    ],
+    "peak_second": 5,
+    "peak_abs_mean": 0.151075,
+    "largest_upward_change_to_second": 5,
+    "largest_upward_change": 0.042503,
+    "relative_jump_pct": 39.1,
+    "words": [
+      [
+        "So",
+        0.595,
+        0.716
+      ],
+      [
+        "the",
+        0.736,
+        0.817
+      ],
+      [
+        "reason",
+        0.837,
+        1.078
+      ],
+      [
+        "I",
+        1.119,
+        1.159
+      ],
+      [
+        "say",
+        1.199,
+        1.32
+      ],
+      [
+        "it's",
+        1.36,
+        1.461
+      ],
+      [
+        "qualitative",
+        1.501,
+        2.085
+      ],
+      [
+        "is",
+        2.468,
+        2.549
+      ],
+      [
+        "because",
+        2.589,
+        2.972
+      ],
+      [
+        "it's",
+        3.052,
+        3.193
+      ],
+      [
+        "either",
+        3.596,
+        3.818
+      ],
+      [
+        "or.",
+        3.959,
+        4.079
+      ]
+    ]
+  }
+]
