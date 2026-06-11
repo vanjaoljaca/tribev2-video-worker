@@ -371,6 +371,22 @@ def zip_dir(src_dir: Path, zip_path: Path) -> None:
                 zf.write(path, arcname=str(path.relative_to(src_dir)))
 
 
+def write_results_bundle(job_id: str, summaries: list[dict[str, Any]]) -> None:
+    root = job_dir(job_id)
+    results_dir = root / "results"
+    manifest = {"summaries": summaries}
+    write_json(results_dir / "manifest.json", manifest)
+    previews = []
+    if results_dir.exists():
+        for result_dir in sorted(results_dir.iterdir()):
+            preview_path = result_dir / "preview.json"
+            if preview_path.exists():
+                previews.append(read_json(preview_path))
+    report = render_report(job_id, manifest, previews)
+    (results_dir / "report.html").write_text(report, encoding="utf-8")
+    zip_dir(results_dir, root / "tribev2-results.zip")
+
+
 def prediction_preview(preds: np.ndarray) -> dict[str, Any]:
     arr = np.asarray(preds)
     if arr.ndim != 2:
@@ -687,62 +703,82 @@ def process_url_job(
     try:
         with JOB_LOCK:
             summaries = []
+            failures = []
             total = len(items)
             for index, item in enumerate(items, start=1):
                 url = item["url"]
                 label = item.get("label")
                 clip_seconds = item.get("clip_seconds")
-                update_status(
-                    job_id,
-                    state="downloading",
-                    message=f"Downloading {label or url}",
-                    current=index,
-                    total=total,
-                    include_text=include_text,
-                )
-                video = download_video_url(root, url, index)
-                stimulus = trim_video(video, clip_seconds)
-                update_status(
-                    job_id,
-                    state="predicting",
-                    message=f"Running TRIBE v2 on {label or stimulus.name}",
-                    current=index,
-                    total=total,
-                    clip_seconds=clip_seconds,
-                    include_text=include_text,
-                    source_url=url,
-                    label=label,
-                )
-                out = root / "results" / stimulus.stem
-                summary = run_prediction(
-                    stimulus,
-                    out,
-                    job_id=job_id,
-                    include_text=include_text,
-                )
-                summary["label"] = label
-                summary["source_url"] = url
-                summary["source_video"] = video.name
-                summary["clip_seconds"] = clip_seconds
-                summaries.append(summary)
+                try:
+                    update_status(
+                        job_id,
+                        state="downloading",
+                        message=f"Downloading {label or url}",
+                        current=index,
+                        total=total,
+                        include_text=include_text,
+                    )
+                    video = download_video_url(root, url, index)
+                    stimulus = trim_video(video, clip_seconds)
+                    update_status(
+                        job_id,
+                        state="predicting",
+                        message=f"Running TRIBE v2 on {label or stimulus.name}",
+                        current=index,
+                        total=total,
+                        clip_seconds=clip_seconds,
+                        include_text=include_text,
+                        source_url=url,
+                        label=label,
+                    )
+                    out = root / "results" / stimulus.stem
+                    summary = run_prediction(
+                        stimulus,
+                        out,
+                        job_id=job_id,
+                        include_text=include_text,
+                    )
+                    summary["label"] = label
+                    summary["source_url"] = url
+                    summary["source_video"] = video.name
+                    summary["clip_seconds"] = clip_seconds
+                    summaries.append(summary)
+                    write_results_bundle(job_id, summaries)
+                except Exception as item_exc:
+                    item_tb = traceback.format_exc()
+                    try:
+                        sys.stderr.write(item_tb + "\n")
+                        sys.stderr.flush()
+                    except Exception:
+                        pass
+                    failures.append(
+                        {
+                            "index": index,
+                            "url": url,
+                            "label": label,
+                            "message": str(item_exc),
+                            "error_type": type(item_exc).__name__,
+                        }
+                    )
+                    update_status(
+                        job_id,
+                        state="predicting",
+                        message=f"Skipped failed item {label or url}",
+                        current=index,
+                        total=total,
+                        failures=failures,
+                    )
+                    if summaries:
+                        write_results_bundle(job_id, summaries)
+                    continue
 
-            manifest = {"summaries": summaries}
-            write_json(root / "results" / "manifest.json", manifest)
-            previews = []
-            for result_dir in sorted((root / "results").iterdir()):
-                preview_path = result_dir / "preview.json"
-                if preview_path.exists():
-                    previews.append(read_json(preview_path))
-            report = render_report(job_id, manifest, previews)
-            (root / "results" / "report.html").write_text(report, encoding="utf-8")
-            zip_path = root / "tribev2-results.zip"
-            zip_dir(root / "results", zip_path)
             update_status(
                 job_id,
-                state="complete",
-                message="Done",
+                state="complete_with_errors" if failures else "complete",
+                message="Done with skipped items" if failures else "Done",
                 current=total,
                 total=total,
+                failures=failures,
                 download_url=f"/jobs/{job_id}/download",
                 report_url=f"/jobs/{job_id}/report",
             )
