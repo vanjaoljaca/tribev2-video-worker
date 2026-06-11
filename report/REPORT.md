@@ -1,7 +1,7 @@
-# Vanjao TRIBE v2 Pilot
+# TRIBE v2 Video Pilot
 
-Two 5-second TikTok clips from `@vanjao.plays` were run through TRIBE v2 with
-audio, video, and text enabled.
+Two 5-second social video clips were run through TRIBE v2 with audio, video,
+and text enabled.
 
 Job: `1e1dcedd43534c67abb28eacb4a8b727`
 
