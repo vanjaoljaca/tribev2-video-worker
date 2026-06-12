@@ -10,13 +10,14 @@ weights, caches, or full raw prediction archives.
 ## Privacy / Hosting Policy
 
 Do not upload private social videos, private TRIBE outputs, raw prediction
-archives, or rendered reports containing private media to Hugging Face or any
-other public hosting target.
+archives, or rendered reports containing private media to any public hosting
+target or to the user's personal Hugging Face namespace.
 
-Hugging Face may be used for boring infrastructure only, such as downloading
-public/gated model dependencies or hosting generic worker code without user
-media. If a remote runner is used, keep user media/results local to the runner
-and delete them after retrieval unless the user explicitly approves otherwise.
+Hugging Face may be used for boring infrastructure, model dependencies, generic
+worker code, and private runs only when the namespace is neutral/non-personal
+or the user explicitly approves the target namespace. If a remote runner is
+used, keep user media/results private and delete them after retrieval unless
+the user explicitly approves otherwise.
 
 ## Cost Notes
 
