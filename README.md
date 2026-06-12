@@ -1,11 +1,22 @@
 # TRIBE v2 Video Worker
 
-Remote Hugging Face Space worker for running short-form videos through
+Worker and analysis helpers for running short-form videos through
 Meta/Facebook Research TRIBE v2 with audio, video, and text events.
 
 This repo contains the runnable worker code and local analysis helpers.
 It intentionally does not include downloaded social videos, HF tokens, model
 weights, caches, or full raw prediction archives.
+
+## Privacy / Hosting Policy
+
+Do not upload private social videos, private TRIBE outputs, raw prediction
+archives, or rendered reports containing private media to Hugging Face or any
+other public hosting target.
+
+Hugging Face may be used for boring infrastructure only, such as downloading
+public/gated model dependencies or hosting generic worker code without user
+media. If a remote runner is used, keep user media/results local to the runner
+and delete them after retrieval unless the user explicitly approves otherwise.
 
 ## Cost Notes
 
@@ -18,7 +29,7 @@ rebuilds, dependency fixes, dtype fixes, and failed attempts. Redos from this
 code should be faster because the worker has the dtype patch, explicit URL jobs,
 single-job locking, and report flow.
 
-## Remote Worker
+## Worker API
 
 Worker code is in [`hf-space/`](hf-space/). It exposes:
 

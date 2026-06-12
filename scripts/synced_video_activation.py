@@ -69,12 +69,14 @@ def build_payload(zip_path):
     sections = []
     for idx, (start, stop) in enumerate(zip(split_points[:-1], split_points[1:])):
         values = np.mean(np.abs(preds[:, start:stop]), axis=1)
+        movement = np.r_[0.0, np.diff(values)]
         normed, lo, hi = normalize(values)
         sections.append(
             {
                 "name": ROUGH_SECTIONS[idx][0],
                 "color": ROUGH_SECTIONS[idx][1],
                 "values": values.tolist(),
+                "movement": movement.tolist(),
                 "norm": normed.tolist(),
                 "min": lo,
                 "max": hi,
@@ -133,6 +135,10 @@ def render_page(payload, video_name, out_dir):
         f'<div class="bar-row"><span>{html.escape(section["name"])}</span><b style="--c:{section["color"]}"><i></i></b><em>0.000</em></div>'
         for section in payload["sections"]
     )
+    movement_rows = "\n".join(
+        f'<div class="diff-row" data-section="{idx}"><span>{html.escape(section["name"])}</span><b>0.000</b><i>0.000</i><em>0.000</em></div>'
+        for idx, section in enumerate(payload["sections"])
+    )
     peak_buttons = "\n".join(
         f'<button type="button" data-second="{row["second"]}">{row["second"]}s <span>{row["energy"]:.3f}</span></button>'
         for row in payload["top_seconds"]
@@ -164,6 +170,15 @@ def render_page(payload, video_name, out_dir):
     .bar-row b {{ height: 14px; background: #edf0f5; border-radius: 999px; overflow: hidden; }}
     .bar-row i {{ display: block; height: 100%; width: 0%; background: var(--c); border-radius: inherit; transition: width .08s linear; }}
     .bar-row em {{ font-style: normal; font-variant-numeric: tabular-nums; color: #475467; text-align: right; }}
+    .diff-title {{ margin: 14px 0 6px; font-size: 13px; color: #475467; font-weight: 650; }}
+    .diff-grid {{ display: grid; gap: 4px; }}
+    .diff-row {{ display: grid; grid-template-columns: minmax(120px, 220px) repeat(3, 64px); gap: 8px; align-items: center; font-size: 12px; padding: 5px 0; border-top: 1px solid #eef1f5; }}
+    .diff-row:first-child {{ border-top: 0; }}
+    .diff-row b, .diff-row i, .diff-row em {{ font-style: normal; font-variant-numeric: tabular-nums; text-align: right; }}
+    .diff-row b {{ color: #17191f; }}
+    .diff-row i {{ color: #667085; }}
+    .diff-row em.up {{ color: #0f7a43; }}
+    .diff-row em.down {{ color: #b42318; }}
     .peaks {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }}
     button {{ appearance: none; border: 1px solid #cfd5df; background: #fff; border-radius: 6px; padding: 7px 9px; font: inherit; cursor: pointer; }}
     button span {{ color: #667085; margin-left: 4px; }}
@@ -174,6 +189,7 @@ def render_page(payload, video_name, out_dir):
       .timeline-wrap {{ height: 220px; }}
       .readout {{ grid-template-columns: repeat(2, 1fr); }}
       .bar-row {{ grid-template-columns: 112px 1fr 48px; }}
+      .diff-row {{ grid-template-columns: 112px repeat(3, 52px); }}
     }}
   </style>
 </head>
@@ -197,6 +213,11 @@ def render_page(payload, video_name, out_dir):
         <div class="metric"><span>jump</span><strong id="jumpMetric">0.000</strong></div>
       </div>
       <div class="bar-stack" id="bars">{section_rows}</div>
+      <div class="diff-title">Current movement: section vs average of the other sections</div>
+      <div class="diff-grid" id="movementDiff">
+        <div class="diff-row"><span></span><b>section</b><i>others</i><em>diff</em></div>
+        {movement_rows}
+      </div>
       <div class="peaks">{peak_buttons}</div>
       <p class="note">Timeline blue = mean absolute predicted response. Orange = positive frame-to-frame jump. Bars below show current activation by rough cortical section.</p>
     </div>
@@ -209,6 +230,7 @@ const video = document.getElementById("video");
 const canvas = document.getElementById("timeline");
 const ctx = canvas.getContext("2d");
 const bars = [...document.querySelectorAll(".bar-row")];
+const diffRows = [...document.querySelectorAll(".diff-row[data-section]")];
 const timeMetric = document.getElementById("timeMetric");
 const energyMetric = document.getElementById("energyMetric");
 const signedMetric = document.getElementById("signedMetric");
@@ -283,6 +305,19 @@ function updateReadout() {{
     row.querySelector("i").style.width = `${{width}}%`;
     row.querySelector("em").textContent = section.values[idx].toFixed(3);
   }});
+  const moves = payload.sections.map(section => section.movement[idx] || 0);
+  payload.sections.forEach((section, sidx) => {{
+    const row = diffRows[sidx];
+    const sectionMove = moves[sidx] || 0;
+    const otherMoves = moves.filter((_, midx) => midx !== sidx);
+    const others = otherMoves.reduce((sum, value) => sum + value, 0) / Math.max(1, otherMoves.length);
+    const diff = sectionMove - others;
+    const diffNode = row.querySelector("em");
+    row.querySelector("b").textContent = sectionMove.toFixed(3);
+    row.querySelector("i").textContent = others.toFixed(3);
+    diffNode.textContent = `${{diff >= 0 ? "+" : ""}}${{diff.toFixed(3)}}`;
+    diffNode.className = diff >= 0 ? "up" : "down";
+  }});
   draw();
 }}
 
@@ -314,7 +349,9 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     video_src = Path(args.video)
     video_name = "singing-sampler-video.mp4"
-    shutil.copy2(video_src, out_dir / video_name)
+    video_dest = out_dir / video_name
+    if video_src.resolve() != video_dest.resolve():
+        shutil.copy2(video_src, video_dest)
 
     payload = build_payload(Path(args.results_zip))
     (out_dir / "activation_sync.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
