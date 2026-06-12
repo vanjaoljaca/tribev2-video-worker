@@ -145,6 +145,36 @@ def sentence_rows(events):
     return rows
 
 
+def word_rows(events):
+    rows = []
+    for row in events:
+        if row.get("type") != "Word" or not row.get("text") or row.get("start") is None:
+            continue
+        text = clean_text(row.get("text"))
+        if not text:
+            continue
+        start = float(row.get("start", 0.0))
+        stop = float(row.get("stop", start))
+        if stop <= start:
+            stop = start + 0.18
+        rows.append({"text": text, "start": start, "stop": stop})
+    return sorted(rows, key=lambda item: (item["start"], item["stop"]))
+
+
+def fallback_sentence_words(sentence):
+    words = sentence["text"].split()
+    if not words:
+        return []
+    duration = max(0.25, sentence["stop"] - sentence["start"])
+    step = duration / len(words)
+    rows = []
+    for idx, word in enumerate(words):
+        start = sentence["start"] + idx * step
+        stop = sentence["start"] + (idx + 1) * step
+        rows.append({"text": word, "start": start, "stop": stop})
+    return rows
+
+
 def title_case(words):
     minor = {"a", "an", "and", "as", "but", "for", "in", "of", "or", "the", "to", "vs"}
     titled = []
@@ -230,47 +260,104 @@ def analyze_clip(zf, dirname, manifest):
     for start, stop in zip(split_points[:-1], split_points[1:]):
         section_energy.append(np.mean(np.abs(preds[:, start:stop]), axis=1))
     section_energy = np.asarray(section_energy)
-    rows = []
-    for sent in sentence_rows(events):
-        lo, hi = window_indices(sent["start"], sent["stop"], len(energy))
+
+    def metrics_for_window(start, stop):
+        lo, hi = window_indices(start, stop, len(energy))
         if lo >= len(energy):
-            continue
-        sent_energy = float(np.mean(energy[lo:hi]))
-        sent_signed = float(np.mean(signed[lo:hi]))
-        energy_delta = sent_energy - local_baseline(energy, sent["start"], sent["stop"])
-        signed_delta = sent_signed - local_baseline(signed, sent["start"], sent["stop"])
+            return None
+        item_energy = float(np.mean(energy[lo:hi]))
+        item_signed = float(np.mean(signed[lo:hi]))
+        energy_delta = item_energy - local_baseline(energy, start, stop)
+        signed_delta = item_signed - local_baseline(signed, start, stop)
         section_values = np.mean(section_energy[:, lo:hi], axis=1)
         section_local = np.asarray(
-            [
-                local_baseline(section_energy[idx], sent["start"], sent["stop"])
-                for idx in range(len(ROUGH_SECTIONS))
-            ]
+            [local_baseline(section_energy[idx], start, stop) for idx in range(len(ROUGH_SECTIONS))]
         )
         section_delta = section_values - section_local
         dominant_idx = int(np.argmax(np.abs(section_delta)))
+        return {
+            "energy": item_energy,
+            "energy_delta": float(energy_delta),
+            "signed": item_signed,
+            "signed_delta": float(signed_delta),
+            "dominant_section": ROUGH_SECTIONS[dominant_idx][0],
+            "dominant_hue": ROUGH_SECTIONS[dominant_idx][1],
+            "dominant_color": ROUGH_SECTIONS[dominant_idx][2],
+            "dominant_section_delta": float(section_delta[dominant_idx]),
+            "sections": [
+                {
+                    "name": name,
+                    "hue": hue,
+                    "color": color,
+                    "energy": float(section_values[idx]),
+                    "delta": float(section_delta[idx]),
+                }
+                for idx, (name, hue, color) in enumerate(ROUGH_SECTIONS)
+            ],
+        }
+
+    def metrics_for_point(start, stop):
+        center = max(0.0, min(float(len(energy) - 1), (start + stop) / 2))
+        timeline = np.arange(len(energy), dtype=float)
+        item_energy = float(np.interp(center, timeline, energy))
+        item_signed = float(np.interp(center, timeline, signed))
+        energy_delta = item_energy - local_baseline(energy, start, stop)
+        signed_delta = item_signed - local_baseline(signed, start, stop)
+        section_values = np.asarray(
+            [np.interp(center, timeline, section_energy[idx]) for idx in range(len(ROUGH_SECTIONS))]
+        )
+        section_local = np.asarray(
+            [local_baseline(section_energy[idx], start, stop) for idx in range(len(ROUGH_SECTIONS))]
+        )
+        section_delta = section_values - section_local
+        dominant_idx = int(np.argmax(np.abs(section_delta)))
+        return {
+            "energy": item_energy,
+            "energy_delta": float(energy_delta),
+            "signed": item_signed,
+            "signed_delta": float(signed_delta),
+            "dominant_section": ROUGH_SECTIONS[dominant_idx][0],
+            "dominant_hue": ROUGH_SECTIONS[dominant_idx][1],
+            "dominant_color": ROUGH_SECTIONS[dominant_idx][2],
+            "dominant_section_delta": float(section_delta[dominant_idx]),
+            "sections": [
+                {
+                    "name": name,
+                    "hue": hue,
+                    "color": color,
+                    "energy": float(section_values[idx]),
+                    "delta": float(section_delta[idx]),
+                }
+                for idx, (name, hue, color) in enumerate(ROUGH_SECTIONS)
+            ],
+        }
+
+    all_words = word_rows(events)
+    rows = []
+    for sent in sentence_rows(events):
+        sent_metrics = metrics_for_window(sent["start"], sent["stop"])
+        if sent_metrics is None:
+            continue
+        sentence_words = [
+            word
+            for word in all_words
+            if sent["start"] - 0.05 <= (word["start"] + word["stop"]) / 2 < sent["stop"] + 0.05
+        ]
+        if not sentence_words:
+            sentence_words = fallback_sentence_words(sent)
+        analyzed_words = []
+        for word in sentence_words:
+            word_metrics = metrics_for_point(word["start"], word["stop"])
+            if word_metrics is None:
+                continue
+            analyzed_words.append({**word, **word_metrics})
         rows.append(
             {
                 "text": sent["text"],
                 "start": sent["start"],
                 "stop": sent["stop"],
-                "energy": sent_energy,
-                "energy_delta": float(energy_delta),
-                "signed": sent_signed,
-                "signed_delta": float(signed_delta),
-                "dominant_section": ROUGH_SECTIONS[dominant_idx][0],
-                "dominant_hue": ROUGH_SECTIONS[dominant_idx][1],
-                "dominant_color": ROUGH_SECTIONS[dominant_idx][2],
-                "dominant_section_delta": float(section_delta[dominant_idx]),
-                "sections": [
-                    {
-                        "name": name,
-                        "hue": hue,
-                        "color": color,
-                        "energy": float(section_values[idx]),
-                        "delta": float(section_delta[idx]),
-                    }
-                    for idx, (name, hue, color) in enumerate(ROUGH_SECTIONS)
-                ],
+                **sent_metrics,
+                "words": analyzed_words,
             }
         )
     if rows:
@@ -309,68 +396,29 @@ def norm(value, lo, hi):
 
 def render_html(clip, all_clips, out_dir):
     out_dir.mkdir(parents=True, exist_ok=True)
-    rows = clip["rows"]
-    if not rows:
+    if not clip["rows"]:
         raise SystemExit("Selected clip has no sentence rows")
-    energies = np.asarray([row["energy"] for row in rows])
-    signed_deltas = np.asarray([row["signed_delta"] for row in rows])
-    e_lo, e_hi = float(np.min(energies)), float(np.max(energies))
-    sd_abs = float(max(abs(np.min(signed_deltas)), abs(np.max(signed_deltas)), 1e-9))
 
     payload = {"selected": clip, "ranked_clips": all_clips}
     (out_dir / "sentence_activation.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
-    all_section_values = [
-        section["energy"]
-        for row in rows
-        for section in row["sections"]
-    ]
-    section_lo, section_hi = min(all_section_values), max(all_section_values)
     legend = "".join(
         f'<span class="legend-chip" style="--c:{color}">{html.escape(name)}</span>'
         for name, _hue, color in ROUGH_SECTIONS
     )
-    ranked = "\n".join(
-        f"<li><strong>{html.escape(item['title'])}</strong> <code>{html.escape(item['label'])}</code> variation {item['variation_score']:.4f}</li>"
-        for item in sorted(all_clips, key=lambda x: x["variation_score"], reverse=True)[:6]
-    )
-    sentence_html = []
-    for idx, row in enumerate(rows, start=1):
-        intensity = norm(row["energy"], e_lo, e_hi)
-        alpha = 0.14 + 0.62 * intensity
-        border_hue = 142 if row["signed_delta"] >= 0 else 355
-        border_alpha = min(0.95, 0.25 + abs(row["signed_delta"]) / sd_abs * 0.7)
-        direction = "up" if row["signed_delta"] >= 0 else "down"
-        stripes = []
-        for section in row["sections"]:
-            section_intensity = norm(section["energy"], section_lo, section_hi)
-            mix = 76 - 54 * section_intensity
-            stripe_alpha = 0.28 + 0.72 * section_intensity
-            stripes.append(
-                f'<i title="{html.escape(section["name"])} {section["energy"]:.4f}" '
-                f'style="--c:{section["color"]};--mix:{mix:.1f}%;--sa:{stripe_alpha:.3f}"></i>'
-            )
-        sentence_html.append(
-            f'''<section class="sentence" style="--bh:{border_hue};--ba:{border_alpha:.3f}">
-  <div class="stripes">{"".join(stripes)}</div>
-  <div class="sentence-content">
-    <div class="meta"><span>{idx}</span><span>{row['start']:.1f}s-{row['stop']:.1f}s</span><span>{html.escape(row['dominant_section'])}</span><span>{direction} {row['signed_delta']:+.4f}</span><span>intensity {row['energy']:.4f}</span></div>
-    <p>{html.escape(row['text'])}</p>
-  </div>
-</section>'''
-        )
+    payload_json = json.dumps(payload).replace("</", "<\\/")
 
     doc = f"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sentence Activation - {html.escape(clip['title'])}</title>
+<title>Word Activation - TRIBE v2</title>
 <style>
 :root {{
   color-scheme: light;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background: #f7f7f2;
+  background: #f6f6f1;
   color: #171713;
 }}
 body {{
@@ -378,7 +426,7 @@ body {{
   padding: 28px;
 }}
 main {{
-  max-width: 980px;
+  max-width: 1040px;
   margin: 0 auto;
 }}
 h1 {{
@@ -397,6 +445,35 @@ h1 {{
   padding: 16px;
   margin: 0 0 18px;
 }}
+.controls {{
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+}}
+label {{
+  display: grid;
+  gap: 6px;
+  color: #424238;
+  font-size: 13px;
+  font-weight: 650;
+}}
+select {{
+  width: 100%;
+  appearance: none;
+  background: #fbfbf7;
+  border: 1px solid #cfcfc4;
+  border-radius: 6px;
+  color: #151512;
+  font: inherit;
+  padding: 10px 12px;
+}}
+.score {{
+  justify-self: end;
+  color: #4f4f45;
+  font-size: 13px;
+  white-space: nowrap;
+}}
 .legend {{
   display: flex;
   flex-wrap: wrap;
@@ -413,48 +490,54 @@ h1 {{
 .sentence {{
   position: relative;
   overflow: hidden;
-  background: #fbfbf7;
-  border-left: 9px solid hsla(var(--bh), 72%, 42%, var(--ba));
+  background: #fffffb;
+  border-left: 8px solid hsla(var(--bh), 72%, 42%, var(--ba));
   border-radius: 8px;
   padding: 0;
-  margin: 10px 0;
+  margin: 12px 0;
   box-shadow: inset 0 0 0 1px rgba(0,0,0,0.08);
-}}
-.stripes {{
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 2px;
-  opacity: 0.94;
-  pointer-events: none;
-}}
-.stripes i {{
-  display: block;
-  height: 6px;
-  margin: 0 10px;
-  background:
-    linear-gradient(
-      90deg,
-      color-mix(in oklab, var(--c), white calc(var(--mix) + 12%)),
-      color-mix(in oklab, var(--c), white var(--mix)),
-      color-mix(in oklab, var(--c), white calc(var(--mix) + 12%))
-    );
-  opacity: var(--sa);
-  border-radius: 999px;
 }}
 .sentence-content {{
   position: relative;
   z-index: 1;
   padding: 14px 16px 15px;
-  min-height: 96px;
 }}
-.sentence p {{
-  margin: 8px 0 0;
-  font-size: 18px;
-  line-height: 1.45;
+.script {{
+  margin: 10px 0 0;
+  font-size: 19px;
+  line-height: 1.72;
   color: #11110e;
+}}
+.word {{
+  position: relative;
+  display: inline-block;
+  margin: 0 0.14em 0.08em 0;
+  padding: 0.01em 0.04em;
+  isolation: isolate;
+}}
+.word-bands {{
+  position: absolute;
+  z-index: -1;
+  left: -0.04em;
+  right: -0.04em;
+  top: 50%;
+  height: 1.2em;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  pointer-events: none;
+}}
+.word-bands i {{
+  display: block;
+  height: calc((1.2em - 7px) / 8);
+  min-height: 1px;
+  background: color-mix(in oklab, var(--c), white var(--mix));
+  opacity: var(--sa);
+  border-radius: 2px;
+}}
+.word-text {{
   text-shadow:
     0 1px 0 rgba(255,255,255,0.82),
     0 -1px 0 rgba(255,255,255,0.58),
@@ -482,22 +565,132 @@ ol {{
 code {{
   font-size: 12px;
 }}
+@media (max-width: 720px) {{
+  body {{ padding: 16px; }}
+  .controls {{ grid-template-columns: 1fr; }}
+  .score {{ justify-self: start; }}
+  .script {{ font-size: 18px; }}
+}}
 </style>
 </head>
 <body>
 <main>
-  <h1>Sentence Activation Text Map</h1>
-  <p class="sub">Selected clip: <strong>{html.escape(clip['title'])}</strong> <code>{html.escape(clip['label'])}</code>. Each sentence has eight thin horizontal section stripes behind the text; each stripe brightens/darkens by that rough section's predicted activation. Left border is signed movement versus local baseline: green up, red down. These are rough cortical sections, not atlas-verified ROI labels.</p>
+  <h1>Word Activation Text Map</h1>
+  <p class="sub">Full script by video. Each word carries eight compressed bands, about 20% taller than the text, with brightness changing from that word's timestamp window. Left sentence border is signed movement versus local baseline: green up, red down. Rough cortical sections, not atlas-verified ROI labels.</p>
+  <div class="panel controls">
+    <label>Video
+      <select id="videoSelect"></select>
+    </label>
+    <div class="score" id="score"></div>
+  </div>
   <div class="panel">
     <strong>Rough section hue legend</strong>
     <div class="legend">{legend}</div>
   </div>
-  <div class="panel">
-    <strong>Most varied clips by sentence score</strong>
-    <ol>{ranked}</ol>
-  </div>
-  {''.join(sentence_html)}
+  <section id="script"></section>
 </main>
+<script id="payload" type="application/json">{payload_json}</script>
+<script>
+const payload = JSON.parse(document.getElementById("payload").textContent);
+const clips = [...payload.ranked_clips].sort((a, b) => b.variation_score - a.variation_score);
+const select = document.getElementById("videoSelect");
+const score = document.getElementById("score");
+const script = document.getElementById("script");
+
+function sectionRange(clip) {{
+  const values = [];
+  for (const row of clip.rows) {{
+    for (const word of row.words || []) {{
+      for (const section of word.sections || []) values.push(section.energy);
+    }}
+  }}
+  if (!values.length) return [0, 1];
+  return [Math.min(...values), Math.max(...values)];
+}}
+
+function signedRange(clip) {{
+  const values = clip.rows.map(row => Math.abs(row.signed_delta || 0));
+  return Math.max(...values, 1e-9);
+}}
+
+function norm(value, lo, hi) {{
+  if (hi <= lo) return 0.5;
+  return Math.max(0, Math.min(1, (value - lo) / (hi - lo)));
+}}
+
+function el(tag, className, text) {{
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}}
+
+function wordNode(word, lo, hi) {{
+  const outer = el("span", "word");
+  outer.title = `${{word.start.toFixed(1)}}s-${{word.stop.toFixed(1)}}s | ${{word.dominant_section}} | signed ${{word.signed_delta.toFixed(4)}}`;
+  const bands = el("span", "word-bands");
+  for (const section of word.sections || []) {{
+    const intensity = norm(section.energy, lo, hi);
+    const mix = 84 - 62 * intensity;
+    const alpha = 0.2 + 0.78 * intensity;
+    const band = document.createElement("i");
+    band.style.setProperty("--c", section.color);
+    band.style.setProperty("--mix", `${{mix.toFixed(1)}}%`);
+    band.style.setProperty("--sa", alpha.toFixed(3));
+    bands.appendChild(band);
+  }}
+  outer.appendChild(bands);
+  outer.appendChild(el("span", "word-text", word.text));
+  return outer;
+}}
+
+function renderClip(index) {{
+  const clip = clips[index];
+  const [sectionLo, sectionHi] = sectionRange(clip);
+  const signedAbs = signedRange(clip);
+  score.textContent = `variation ${{clip.variation_score.toFixed(4)}} | source ${{clip.label}}`;
+  script.replaceChildren();
+  for (let idx = 0; idx < clip.rows.length; idx += 1) {{
+    const row = clip.rows[idx];
+    const direction = row.signed_delta >= 0 ? "up" : "down";
+    const borderHue = row.signed_delta >= 0 ? 142 : 355;
+    const borderAlpha = Math.min(0.95, 0.25 + Math.abs(row.signed_delta) / signedAbs * 0.7);
+    const card = el("section", "sentence");
+    card.style.setProperty("--bh", borderHue);
+    card.style.setProperty("--ba", borderAlpha.toFixed(3));
+    const content = el("div", "sentence-content");
+    const meta = el("div", "meta");
+    for (const item of [
+      String(idx + 1),
+      `${{row.start.toFixed(1)}}s-${{row.stop.toFixed(1)}}s`,
+      row.dominant_section,
+      `${{direction}} ${{row.signed_delta >= 0 ? "+" : ""}}${{row.signed_delta.toFixed(4)}}`,
+      `intensity ${{row.energy.toFixed(4)}}`,
+    ]) {{
+      meta.appendChild(el("span", "", item));
+    }}
+    const text = el("p", "script");
+    const words = row.words && row.words.length ? row.words : row.text.split(/\\s+/).map(token => ({{ text: token, sections: row.sections, start: row.start, stop: row.stop, dominant_section: row.dominant_section, signed_delta: row.signed_delta }}));
+    for (const word of words) {{
+      text.appendChild(wordNode(word, sectionLo, sectionHi));
+    }}
+    content.appendChild(meta);
+    content.appendChild(text);
+    card.appendChild(content);
+    script.appendChild(card);
+  }}
+}}
+
+clips.forEach((clip, index) => {{
+  const option = document.createElement("option");
+  option.value = String(index);
+  option.textContent = `${{clip.title}} (${{clip.variation_score.toFixed(4)}})`;
+  if (clip.dirname === payload.selected.dirname) option.selected = true;
+  select.appendChild(option);
+}});
+select.addEventListener("change", event => renderClip(Number(event.target.value)));
+renderClip(Number(select.value || 0));
+</script>
 </body>
 </html>
 """
