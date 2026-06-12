@@ -3,23 +3,15 @@
 Remote Hugging Face Space worker for running short-form videos through
 Meta/Facebook Research TRIBE v2 with audio, video, and text events.
 
-This repo contains the runnable worker code plus a small verified pilot report.
+This repo contains the runnable worker code and local analysis helpers.
 It intentionally does not include downloaded social videos, HF tokens, model
 weights, caches, or full raw prediction archives.
 
-## Verified Pilot
-
-- Clips: 2
-- Clip length: 5 seconds each
-- Modalities: `audio+video+text`
-- Output shape for both clips: `[6, 20484]`
-
-The generated phone-friendly report lives in [`report/REPORT.md`](report/REPORT.md).
-
 ## Cost Notes
 
-The successful text-enabled two-video pilot itself ran for about 4 minutes.
-On Hugging Face A10G-large at `$1.50/hr`, that is about `$0.10` of GPU time.
+Short social-video runs are usually cheap once the Space is built and the model
+is cached. On Hugging Face A10G-large at `$1.50/hr`, 10 minutes is about `$0.25`
+of GPU time.
 
 First-time setup/debug sessions cost more wall time because they include Space
 rebuilds, dependency fixes, dtype fixes, and failed attempts. Redos from this
@@ -79,4 +71,5 @@ api.pause_space(repo_id="<user>/<space-name>")
 
 ## Visuals
 
-The pilot analysis plots are in [`report/visuals/`](report/visuals/).
+Analysis helpers are in [`scripts/`](scripts/), including a text-first sentence
+activation view that renders local HTML from a worker result zip.

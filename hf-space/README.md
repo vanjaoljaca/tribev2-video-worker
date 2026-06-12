@@ -17,7 +17,7 @@ Endpoints:
 
 - `GET /health`
 - `POST /predict_video` with multipart `file`
-- `POST /jobs/tiktok` with JSON `{"account_url":"https://www.tiktok.com/@vanjao.plays","count":12}`
+- `POST /jobs/tiktok` with JSON `{"account_url":"https://www.tiktok.com/@some_account","count":12}`
 - `GET /jobs/{job_id}`
 - `GET /jobs/{job_id}/download`
 

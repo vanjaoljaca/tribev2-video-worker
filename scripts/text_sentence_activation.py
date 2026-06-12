@@ -11,14 +11,75 @@ from PIL import Image, ImageDraw, ImageFont
 
 
 ROUGH_SECTIONS = [
-    ("prefrontal / executive", 12),
-    ("motor / premotor", 42),
-    ("somatosensory / parietal", 82),
-    ("temporal / auditory-language", 128),
-    ("occipital / visual", 188),
-    ("insula / salience-interoception", 232),
-    ("limbic / medial", 286),
-    ("association cortex", 328),
+    ("prefrontal / executive", 12, "#2f6fbb"),
+    ("motor / premotor", 34, "#c46628"),
+    ("somatosensory / parietal", 142, "#2f8f5b"),
+    ("temporal / auditory-language", 272, "#7654a8"),
+    ("occipital / visual", 48, "#c8a021"),
+    ("insula / salience-interoception", 188, "#16858a"),
+    ("limbic / medial", 322, "#b23a7a"),
+    ("association cortex", 218, "#667085"),
+]
+
+STOPWORDS = {
+    "about",
+    "actually",
+    "also",
+    "because",
+    "really",
+    "right",
+    "there",
+    "thing",
+    "things",
+    "think",
+    "this",
+    "that",
+    "these",
+    "those",
+    "what",
+    "when",
+    "where",
+    "which",
+    "while",
+    "with",
+    "would",
+    "you",
+    "your",
+    "have",
+    "has",
+    "had",
+    "was",
+    "were",
+    "are",
+    "not",
+    "but",
+    "and",
+    "the",
+    "for",
+    "from",
+    "into",
+    "then",
+    "than",
+    "they",
+    "them",
+    "it's",
+    "im",
+    "i",
+}
+
+TITLE_PHRASES = [
+    ("booba", "kiki", "attention", "Booba Kiki Attention"),
+    ("moving", "needle", "", "Moving The Needle"),
+    ("discipline", "motivation", "", "Discipline Versus Motivation"),
+    ("gym", "movement", "feels", "Gym Movement Feels Good"),
+    ("monkey", "swear", "", "Swearing Monkey Alarm"),
+    ("monkeys", "swearing", "", "Swearing Monkey Alarm"),
+    ("chatgpt", "swearing", "book", "ChatGPT Swearing Book"),
+    ("painting", "political", "context", "Art Political Context"),
+    ("should", "political art", "", "Political Art Shoulds"),
+    ("art", "political", "intent", "Political Art Intent"),
+    ("political", "intent", "effect", "Political Intent Effect"),
+    ("political", "effect", "intent", "Political Effect Intent"),
 ]
 
 
@@ -82,6 +143,48 @@ def sentence_rows(events):
             }
         )
     return rows
+
+
+def title_case(words):
+    minor = {"a", "an", "and", "as", "but", "for", "in", "of", "or", "the", "to", "vs"}
+    titled = []
+    for idx, word in enumerate(words):
+        lower = word.lower()
+        if lower == "chatgpt":
+            titled.append("ChatGPT")
+        elif lower == "ai":
+            titled.append("AI")
+        elif lower == "vs":
+            titled.append("Vs")
+        elif idx and lower in minor:
+            titled.append(lower)
+        else:
+            titled.append(lower.capitalize())
+    return " ".join(titled)
+
+
+def transcript_title(rows, fallback):
+    text = clean_text(" ".join(row["text"] for row in rows))
+    lower = text.lower()
+    for required_a, required_b, required_c, title in TITLE_PHRASES:
+        if required_a in lower and required_b in lower and (not required_c or required_c in lower):
+            return title
+
+    first = rows[0]["text"] if rows else fallback
+    cleaned = (
+        first.replace("Number one.", "")
+        .replace("Number one", "")
+        .replace("?", "")
+        .replace(".", "")
+        .replace(",", "")
+        .replace(":", "")
+        .replace(";", "")
+    )
+    words = [word.strip("'\"()[]").lower() for word in cleaned.split()]
+    words = [word for word in words if word and word not in STOPWORDS]
+    if len(words) < 3:
+        words = [word.strip("'\"()[]").lower() for word in cleaned.split() if word.strip("'\"()[]")]
+    return title_case(words[:5] or [fallback])
 
 
 def window_indices(start, stop, length):
@@ -156,15 +259,17 @@ def analyze_clip(zf, dirname, manifest):
                 "signed_delta": float(signed_delta),
                 "dominant_section": ROUGH_SECTIONS[dominant_idx][0],
                 "dominant_hue": ROUGH_SECTIONS[dominant_idx][1],
+                "dominant_color": ROUGH_SECTIONS[dominant_idx][2],
                 "dominant_section_delta": float(section_delta[dominant_idx]),
                 "sections": [
                     {
                         "name": name,
                         "hue": hue,
+                        "color": color,
                         "energy": float(section_values[idx]),
                         "delta": float(section_delta[idx]),
                     }
-                    for idx, (name, hue) in enumerate(ROUGH_SECTIONS)
+                    for idx, (name, hue, color) in enumerate(ROUGH_SECTIONS)
                 ],
             }
         )
@@ -174,7 +279,13 @@ def analyze_clip(zf, dirname, manifest):
         variation = float(np.std(energies) + 0.75 * np.std(deltas) + (np.max(energies) - np.min(energies)) / 4)
     else:
         variation = 0.0
-    return {"label": label, "dirname": dirname, "rows": rows, "variation_score": variation}
+    return {
+        "label": label,
+        "title": transcript_title(rows, label),
+        "dirname": dirname,
+        "rows": rows,
+        "variation_score": variation,
+    }
 
 
 def choose_clip(zip_path, requested_label=None):
@@ -216,11 +327,11 @@ def render_html(clip, all_clips, out_dir):
     ]
     section_lo, section_hi = min(all_section_values), max(all_section_values)
     legend = "".join(
-        f'<span class="legend-chip" style="--h:{hue}">{html.escape(name)}</span>'
-        for name, hue in ROUGH_SECTIONS
+        f'<span class="legend-chip" style="--c:{color}">{html.escape(name)}</span>'
+        for name, _hue, color in ROUGH_SECTIONS
     )
     ranked = "\n".join(
-        f"<li><code>{html.escape(item['label'])}</code> variation {item['variation_score']:.4f}</li>"
+        f"<li><strong>{html.escape(item['title'])}</strong> <code>{html.escape(item['label'])}</code> variation {item['variation_score']:.4f}</li>"
         for item in sorted(all_clips, key=lambda x: x["variation_score"], reverse=True)[:6]
     )
     sentence_html = []
@@ -233,11 +344,11 @@ def render_html(clip, all_clips, out_dir):
         stripes = []
         for section in row["sections"]:
             section_intensity = norm(section["energy"], section_lo, section_hi)
-            light = 92 - 48 * section_intensity
+            mix = 76 - 54 * section_intensity
             stripe_alpha = 0.28 + 0.72 * section_intensity
             stripes.append(
                 f'<i title="{html.escape(section["name"])} {section["energy"]:.4f}" '
-                f'style="--h:{section["hue"]};--l:{light:.1f}%;--sa:{stripe_alpha:.3f}"></i>'
+                f'style="--c:{section["color"]};--mix:{mix:.1f}%;--sa:{stripe_alpha:.3f}"></i>'
             )
         sentence_html.append(
             f'''<section class="sentence" style="--bh:{border_hue};--ba:{border_alpha:.3f}">
@@ -254,7 +365,7 @@ def render_html(clip, all_clips, out_dir):
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sentence Activation - {html.escape(clip['label'])}</title>
+<title>Sentence Activation - {html.escape(clip['title'])}</title>
 <style>
 :root {{
   color-scheme: light;
@@ -293,8 +404,8 @@ h1 {{
   margin-top: 10px;
 }}
 .legend-chip {{
-  background: hsl(var(--h) 72% 82%);
-  border: 1px solid hsl(var(--h) 50% 48%);
+  background: color-mix(in oklab, var(--c), white 78%);
+  border: 1px solid color-mix(in oklab, var(--c), black 8%);
   border-radius: 999px;
   padding: 4px 9px;
   font-size: 12px;
@@ -302,44 +413,53 @@ h1 {{
 .sentence {{
   position: relative;
   overflow: hidden;
-  background: #ffffff;
+  background: #fbfbf7;
   border-left: 9px solid hsla(var(--bh), 72%, 42%, var(--ba));
   border-radius: 8px;
-  padding: 12px 14px;
+  padding: 0;
   margin: 10px 0;
   box-shadow: inset 0 0 0 1px rgba(0,0,0,0.08);
 }}
 .stripes {{
   position: absolute;
   inset: 0;
-  display: grid;
-  grid-template-rows: repeat(8, minmax(3px, 1fr));
-  opacity: 0.86;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  opacity: 0.94;
   pointer-events: none;
 }}
 .stripes i {{
   display: block;
+  height: 6px;
+  margin: 0 10px;
   background:
     linear-gradient(
       90deg,
-      hsla(var(--h), 84%, var(--l), calc(var(--sa) * 0.56)),
-      hsla(var(--h), 84%, calc(var(--l) - 9%), calc(var(--sa) * 0.76)),
-      hsla(var(--h), 84%, var(--l), calc(var(--sa) * 0.56))
+      color-mix(in oklab, var(--c), white calc(var(--mix) + 12%)),
+      color-mix(in oklab, var(--c), white var(--mix)),
+      color-mix(in oklab, var(--c), white calc(var(--mix) + 12%))
     );
-  border-bottom: 1px solid rgba(255,255,255,0.2);
+  opacity: var(--sa);
+  border-radius: 999px;
 }}
 .sentence-content {{
   position: relative;
   z-index: 1;
-  background: rgba(255,255,255,0.62);
-  border-radius: 6px;
-  padding: 9px 10px;
-  backdrop-filter: blur(1px);
+  padding: 14px 16px 15px;
+  min-height: 96px;
 }}
 .sentence p {{
   margin: 8px 0 0;
   font-size: 18px;
   line-height: 1.45;
+  color: #11110e;
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.82),
+    0 -1px 0 rgba(255,255,255,0.58),
+    1px 0 0 rgba(255,255,255,0.58),
+    -1px 0 0 rgba(255,255,255,0.58);
 }}
 .meta {{
   display: flex;
@@ -350,7 +470,7 @@ h1 {{
   font-weight: 650;
 }}
 .meta span {{
-  background: rgba(255,255,255,0.62);
+  background: rgba(255,255,255,0.72);
   border: 1px solid rgba(0,0,0,0.08);
   border-radius: 999px;
   padding: 3px 7px;
@@ -367,7 +487,7 @@ code {{
 <body>
 <main>
   <h1>Sentence Activation Text Map</h1>
-  <p class="sub">Selected clip: <code>{html.escape(clip['label'])}</code>. Each sentence has eight thin horizontal section stripes behind the text; each stripe brightens/darkens by that rough section's predicted activation. Left border is signed movement versus local baseline: green up, red down. These are rough cortical sections, not atlas-verified ROI labels.</p>
+  <p class="sub">Selected clip: <strong>{html.escape(clip['title'])}</strong> <code>{html.escape(clip['label'])}</code>. Each sentence has eight thin horizontal section stripes behind the text; each stripe brightens/darkens by that rough section's predicted activation. Left border is signed movement versus local baseline: green up, red down. These are rough cortical sections, not atlas-verified ROI labels.</p>
   <div class="panel">
     <strong>Rough section hue legend</strong>
     <div class="legend">{legend}</div>
@@ -390,6 +510,16 @@ def hsl_to_rgb(h, s=0.74, l=0.72):
 
     r, g, b = colorsys.hls_to_rgb((h % 360) / 360.0, l, s)
     return int(r * 255), int(g * 255), int(b * 255)
+
+
+def hex_to_rgb(value):
+    value = value.lstrip("#")
+    return tuple(int(value[idx : idx + 2], 16) for idx in (0, 2, 4))
+
+
+def blend_rgb(color, amount_white):
+    rgb = hex_to_rgb(color)
+    return tuple(int(channel * (1 - amount_white) + 255 * amount_white) for channel in rgb)
 
 
 def load_font(size, bold=False):
@@ -454,7 +584,7 @@ def render_png(clip, out_path):
     y = margin
     draw.text((margin, y), "Sentence Activation Text Map", fill=(22, 22, 18), font=title_font)
     y += 42
-    draw.text((margin, y), f"Selected: {clip['label']}  |  stripes = rough cortical sections, brightness = activation", fill=(70, 70, 62), font=meta_font)
+    draw.text((margin, y), f"Selected: {clip['title']}  |  stripes = rough cortical sections, brightness = activation", fill=(70, 70, 62), font=meta_font)
     y += 34
 
     for row, lines, card_h in cards:
@@ -468,7 +598,7 @@ def render_png(clip, out_path):
         sy = y + 14
         for section in row["sections"]:
             intensity = norm(section["energy"], section_lo, section_hi)
-            rgb = hsl_to_rgb(section["hue"], l=0.90 - 0.42 * intensity)
+            rgb = blend_rgb(section["color"], 0.76 - 0.54 * intensity)
             draw.rectangle((x + 20, sy, x + card_w - 16, sy + stripe_h), fill=rgb)
             sy += stripe_h + stripe_gap
         meta = f"{row['start']:.1f}-{row['stop']:.1f}s | {row['dominant_section']} | signed {row['signed_delta']:+.4f} | intensity {row['energy']:.4f}"
@@ -489,7 +619,17 @@ def main():
     args = parser.parse_args()
     clip, clips = choose_clip(args.zip_path, args.label)
     render_html(clip, clips, args.out_dir)
-    print(json.dumps({"selected": clip["label"], "variation_score": clip["variation_score"], "out_dir": str(args.out_dir)}, indent=2))
+    print(
+        json.dumps(
+            {
+                "selected": clip["title"],
+                "source_label": clip["label"],
+                "variation_score": clip["variation_score"],
+                "out_dir": str(args.out_dir),
+            },
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":

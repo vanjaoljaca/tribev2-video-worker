@@ -37,7 +37,7 @@ app = FastAPI(title="TRIBE v2 Remote Worker")
 
 
 class TikTokJobRequest(BaseModel):
-    account_url: str = "https://www.tiktok.com/@vanjao.plays"
+    account_url: str = "https://www.tiktok.com/@some_account"
     count: int = 12
     clip_seconds: float | None = 5.0
     include_text: bool = True

@@ -5,7 +5,7 @@ COUNT="${1:-12}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RAW_DIR="$ROOT/raw"
 NOTES_DIR="$ROOT/notes"
-ACCOUNT_URL="https://www.tiktok.com/@vanjao.plays"
+ACCOUNT_URL="${ACCOUNT_URL:-https://www.tiktok.com/@some_account}"
 
 mkdir -p "$RAW_DIR" "$NOTES_DIR"
 
@@ -28,4 +28,3 @@ python3 "$ROOT/scripts/metadata_manifest.py" "$NOTES_DIR/tiktok-metadata.ndjson"
 echo "Wrote metadata: $NOTES_DIR/tiktok-metadata.ndjson"
 echo "Wrote manifest: $NOTES_DIR/tiktok-manifest.tsv"
 echo "Videos are in: $RAW_DIR"
-
