@@ -461,12 +461,20 @@ label {{
 select {{
   width: 100%;
   appearance: none;
-  background: #fbfbf7;
-  border: 1px solid #cfcfc4;
+  background:
+    linear-gradient(45deg, transparent 50%, #30302b 50%) right 18px center / 7px 7px no-repeat,
+    linear-gradient(135deg, #30302b 50%, transparent 50%) right 13px center / 7px 7px no-repeat,
+    #fbfbf7;
+  border: 1px solid #9f9f93;
   border-radius: 6px;
   color: #151512;
   font: inherit;
-  padding: 10px 12px;
+  font-weight: 650;
+  padding: 10px 36px 10px 12px;
+  cursor: pointer;
+}}
+select:hover {{
+  border-color: #67675d;
 }}
 .score {{
   justify-self: end;
@@ -487,26 +495,44 @@ select {{
   padding: 4px 9px;
   font-size: 12px;
 }}
-.sentence {{
-  position: relative;
-  overflow: hidden;
+.clip-note {{
+  color: #4f4f45;
+  font-size: 13px;
+  margin: -6px 0 12px;
+}}
+.transcript-table {{
+  width: 100%;
+  border-collapse: collapse;
   background: #fffffb;
-  border-left: 8px solid hsla(var(--bh), 72%, 42%, var(--ba));
+  border: 1px solid #ddddcf;
   border-radius: 8px;
-  padding: 0;
-  margin: 12px 0;
-  box-shadow: inset 0 0 0 1px rgba(0,0,0,0.08);
+  overflow: hidden;
 }}
-.sentence-content {{
-  position: relative;
-  z-index: 1;
-  padding: 14px 16px 15px;
+.transcript-row {{
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 18px;
+  align-items: baseline;
+  padding: 9px 12px 9px 14px;
+  border-top: 1px solid #ececde;
 }}
-.script {{
-  margin: 10px 0 0;
+.transcript-row:first-child {{
+  border-top: 0;
+}}
+.line-text {{
+  margin: 0;
   font-size: 19px;
-  line-height: 1.72;
+  line-height: 1.55;
   color: #11110e;
+}}
+.line-stats {{
+  color: #626257;
+  font-size: 12px;
+  line-height: 1.2;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }}
 .word {{
   position: relative;
@@ -544,20 +570,6 @@ select {{
     1px 0 0 rgba(255,255,255,0.58),
     -1px 0 0 rgba(255,255,255,0.58);
 }}
-.meta {{
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  color: #30302b;
-  font-size: 12px;
-  font-weight: 650;
-}}
-.meta span {{
-  background: rgba(255,255,255,0.72);
-  border: 1px solid rgba(0,0,0,0.08);
-  border-radius: 999px;
-  padding: 3px 7px;
-}}
 ol {{
   margin: 8px 0 0 20px;
   padding: 0;
@@ -569,25 +581,28 @@ code {{
   body {{ padding: 16px; }}
   .controls {{ grid-template-columns: 1fr; }}
   .score {{ justify-self: start; }}
-  .script {{ font-size: 18px; }}
+  .transcript-row {{ grid-template-columns: 1fr; gap: 4px; }}
+  .line-stats {{ justify-content: flex-start; }}
+  .line-text {{ font-size: 18px; }}
 }}
 </style>
 </head>
 <body>
 <main>
   <h1>Word Activation Text Map</h1>
-  <p class="sub">Full script by video. Each word carries eight compressed bands, about 20% taller than the text, with brightness changing from that word's timestamp window. Left sentence border is signed movement versus local baseline: green up, red down. Rough cortical sections, not atlas-verified ROI labels.</p>
+  <p class="sub">Full transcript of the processed clip by video. Each word carries eight compressed bands, about 20% taller than the text, with brightness changing from that word's timestamp window. Rough cortical sections, not atlas-verified ROI labels.</p>
   <div class="panel controls">
     <label>Video
       <select id="videoSelect"></select>
     </label>
     <div class="score" id="score"></div>
   </div>
+  <div id="clipNote" class="clip-note"></div>
+  <section id="script" class="transcript-table"></section>
   <div class="panel">
     <strong>Rough section hue legend</strong>
     <div class="legend">{legend}</div>
   </div>
-  <section id="script"></section>
 </main>
 <script id="payload" type="application/json">{payload_json}</script>
 <script>
@@ -596,6 +611,7 @@ const clips = [...payload.ranked_clips].sort((a, b) => b.variation_score - a.var
 const select = document.getElementById("videoSelect");
 const score = document.getElementById("score");
 const script = document.getElementById("script");
+const clipNote = document.getElementById("clipNote");
 
 function sectionRange(clip) {{
   const values = [];
@@ -647,37 +663,27 @@ function wordNode(word, lo, hi) {{
 function renderClip(index) {{
   const clip = clips[index];
   const [sectionLo, sectionHi] = sectionRange(clip);
-  const signedAbs = signedRange(clip);
   score.textContent = `variation ${{clip.variation_score.toFixed(4)}} | source ${{clip.label}}`;
+  const wordCount = clip.rows.reduce((sum, row) => sum + ((row.words && row.words.length) || 0), 0);
+  const start = Math.min(...clip.rows.map(row => row.start));
+  const stop = Math.max(...clip.rows.map(row => row.stop));
+  clipNote.textContent = `${{clip.title}}: ${{clip.rows.length}} transcript lines, ${{wordCount}} words, processed window ${{start.toFixed(1)}}s-${{stop.toFixed(1)}}s.`;
   script.replaceChildren();
   for (let idx = 0; idx < clip.rows.length; idx += 1) {{
     const row = clip.rows[idx];
     const direction = row.signed_delta >= 0 ? "up" : "down";
-    const borderHue = row.signed_delta >= 0 ? 142 : 355;
-    const borderAlpha = Math.min(0.95, 0.25 + Math.abs(row.signed_delta) / signedAbs * 0.7);
-    const card = el("section", "sentence");
-    card.style.setProperty("--bh", borderHue);
-    card.style.setProperty("--ba", borderAlpha.toFixed(3));
-    const content = el("div", "sentence-content");
-    const meta = el("div", "meta");
-    for (const item of [
-      String(idx + 1),
-      `${{row.start.toFixed(1)}}s-${{row.stop.toFixed(1)}}s`,
-      row.dominant_section,
-      `${{direction}} ${{row.signed_delta >= 0 ? "+" : ""}}${{row.signed_delta.toFixed(4)}}`,
-      `intensity ${{row.energy.toFixed(4)}}`,
-    ]) {{
-      meta.appendChild(el("span", "", item));
-    }}
-    const text = el("p", "script");
+    const rowNode = el("div", "transcript-row");
+    const text = el("p", "line-text");
+    const stats = el("div", "line-stats");
+    stats.textContent = `#${{idx + 1}}  ${{row.start.toFixed(1)}}-${{row.stop.toFixed(1)}}s  ${{row.dominant_section}}  ${{direction}} ${{row.signed_delta >= 0 ? "+" : ""}}${{row.signed_delta.toFixed(4)}}  int ${{row.energy.toFixed(4)}}`;
+    stats.title = stats.textContent;
     const words = row.words && row.words.length ? row.words : row.text.split(/\\s+/).map(token => ({{ text: token, sections: row.sections, start: row.start, stop: row.stop, dominant_section: row.dominant_section, signed_delta: row.signed_delta }}));
     for (const word of words) {{
       text.appendChild(wordNode(word, sectionLo, sectionHi));
     }}
-    content.appendChild(meta);
-    content.appendChild(text);
-    card.appendChild(content);
-    script.appendChild(card);
+    rowNode.appendChild(text);
+    rowNode.appendChild(stats);
+    script.appendChild(rowNode);
   }}
 }}
 
