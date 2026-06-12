@@ -239,17 +239,26 @@ def local_baseline(values, start, stop, radius=6):
     return float(np.median(context))
 
 
-def label_for_dir(zf, dirname, manifest):
+def summary_for_dir(zf, dirname, manifest):
     summary = load_json(zf, f"{dirname}/summary.json")
     input_name = summary.get("input")
     for item in manifest.get("summaries", []):
         if item.get("input") == input_name:
-            return item.get("label") or Path(input_name or dirname).stem
-    return Path(input_name or dirname).stem
+            return {**summary, **item}
+    return summary
 
 
-def analyze_clip(zf, dirname, manifest):
-    label = label_for_dir(zf, dirname, manifest)
+def label_for_dir(zf, dirname, manifest):
+    summary = summary_for_dir(zf, dirname, manifest)
+    input_name = summary.get("input")
+    return summary.get("label") or Path(input_name or dirname).stem
+
+
+def analyze_clip(zf, dirname, manifest, source_name=None):
+    source_summary = summary_for_dir(zf, dirname, manifest)
+    label = source_summary.get("label") or Path(source_summary.get("input") or dirname).stem
+    if source_name:
+        label = f"{source_name} / {label}"
     preds = load_npy(zf, f"{dirname}/predictions.npy")
     events = load_json(zf, f"{dirname}/events.json")
     energy = np.mean(np.abs(preds), axis=1)
@@ -370,23 +379,55 @@ def analyze_clip(zf, dirname, manifest):
         "label": label,
         "title": transcript_title(rows, label),
         "dirname": dirname,
+        "source_zip": source_name,
+        "input": source_summary.get("input"),
+        "source_url": source_summary.get("source_url"),
+        "source_video": source_summary.get("source_video"),
+        "clip_seconds": source_summary.get("clip_seconds"),
+        "is_uncut": source_summary.get("clip_seconds") is None,
         "rows": rows,
         "variation_score": variation,
     }
 
 
-def choose_clip(zip_path, requested_label=None):
-    with zipfile.ZipFile(zip_path) as zf:
-        manifest = load_json(zf, "manifest.json")
-        clips = [analyze_clip(zf, dirname, manifest) for dirname in result_dirs(zf)]
-    if requested_label:
-        for clip in clips:
-            if requested_label in clip["label"] or requested_label in clip["dirname"]:
-                return clip, clips
-        raise SystemExit(f"No clip matched: {requested_label}")
-    clips.sort(key=lambda clip: clip["variation_score"], reverse=True)
-    return clips[0], clips
+def load_clips(zip_paths):
+    clips = []
+    for zip_path in zip_paths:
+        source_name = Path(zip_path).parent.name
+        with zipfile.ZipFile(zip_path) as zf:
+            manifest = load_json(zf, "manifest.json")
+            clips.extend(
+                analyze_clip(zf, dirname, manifest, source_name=source_name)
+                for dirname in result_dirs(zf)
+            )
+    return clips
 
+
+def choose_clip(zip_paths, requested_label=None):
+    if not zip_paths:
+        raise SystemExit("At least one results zip is required")
+    clips = load_clips(zip_paths)
+    if not clips:
+        raise SystemExit("No prediction results found in input zip(s)")
+    if len(zip_paths) == 1:
+        # Preserve old labels for single-zip reports.
+        with zipfile.ZipFile(zip_paths[0]) as zf:
+            manifest = load_json(zf, "manifest.json")
+            clips = [analyze_clip(zf, dirname, manifest) for dirname in result_dirs(zf)]
+    if requested_label:
+        matches = []
+        for clip in clips:
+            haystack = " ".join(
+                str(value or "")
+                for value in (clip.get("label"), clip.get("title"), clip.get("dirname"), clip.get("source_zip"))
+            )
+            if requested_label.lower() in haystack.lower():
+                matches.append(clip)
+        if matches:
+            return matches[0], clips
+        raise SystemExit(f"No clip matched: {requested_label}")
+    clips.sort(key=lambda clip: (1 if clip.get("is_uncut") else 0, clip["variation_score"]), reverse=True)
+    return clips[0], clips
 
 def norm(value, lo, hi):
     if hi <= lo:
@@ -607,7 +648,11 @@ code {{
 <script id="payload" type="application/json">{payload_json}</script>
 <script>
 const payload = JSON.parse(document.getElementById("payload").textContent);
-const clips = [...payload.ranked_clips].sort((a, b) => b.variation_score - a.variation_score);
+const clips = [...payload.ranked_clips].sort((a, b) => {{
+  const uncut = Number(Boolean(b.is_uncut)) - Number(Boolean(a.is_uncut));
+  if (uncut) return uncut;
+  return b.variation_score - a.variation_score;
+}});
 const select = document.getElementById("videoSelect");
 const score = document.getElementById("score");
 const script = document.getElementById("script");
@@ -663,11 +708,12 @@ function wordNode(word, lo, hi) {{
 function renderClip(index) {{
   const clip = clips[index];
   const [sectionLo, sectionHi] = sectionRange(clip);
-  score.textContent = `variation ${{clip.variation_score.toFixed(4)}} | source ${{clip.label}}`;
+  const cutLabel = clip.is_uncut ? "uncut/full processed" : `${{clip.clip_seconds || "?"}}s trim`;
+  score.textContent = `variation ${{clip.variation_score.toFixed(4)}} | ${{cutLabel}} | source ${{clip.label}}`;
   const wordCount = clip.rows.reduce((sum, row) => sum + ((row.words && row.words.length) || 0), 0);
   const start = Math.min(...clip.rows.map(row => row.start));
   const stop = Math.max(...clip.rows.map(row => row.stop));
-  clipNote.textContent = `${{clip.title}}: ${{clip.rows.length}} transcript lines, ${{wordCount}} words, processed window ${{start.toFixed(1)}}s-${{stop.toFixed(1)}}s.`;
+  clipNote.textContent = `${{clip.title}}: ${{clip.rows.length}} transcript lines, ${{wordCount}} words, processed window ${{start.toFixed(1)}}s-${{stop.toFixed(1)}}s. ${{clip.is_uncut ? "This clip was processed uncut." : "This clip was processed as a trim."}}`;
   script.replaceChildren();
   for (let idx = 0; idx < clip.rows.length; idx += 1) {{
     const row = clip.rows[idx];
@@ -690,7 +736,8 @@ function renderClip(index) {{
 clips.forEach((clip, index) => {{
   const option = document.createElement("option");
   option.value = String(index);
-  option.textContent = `${{clip.title}} (${{clip.variation_score.toFixed(4)}})`;
+  const cutLabel = clip.is_uncut ? "FULL" : `${{clip.clip_seconds || "?"}}s`;
+  option.textContent = `${{cutLabel}} | ${{clip.title}} (${{clip.variation_score.toFixed(4)}})`;
   if (clip.dirname === payload.selected.dirname) option.selected = true;
   select.appendChild(option);
 }});
@@ -812,19 +859,22 @@ def render_png(clip, out_path):
 
 def main():
     parser = argparse.ArgumentParser(description="Build text-first sentence activation visualization.")
-    parser.add_argument("zip_path", type=Path)
-    parser.add_argument("out_dir", type=Path)
+    parser.add_argument("inputs", nargs="+", type=Path, help="One or more TRIBE result zip files, followed by output dir.")
     parser.add_argument("--label", help="Optional substring for the clip label/dir to visualize.")
     args = parser.parse_args()
-    clip, clips = choose_clip(args.zip_path, args.label)
-    render_html(clip, clips, args.out_dir)
+    if len(args.inputs) < 2:
+        raise SystemExit("Usage: text_sentence_activation.py <results.zip> [more-results.zip ...] <out_dir>")
+    zip_paths = args.inputs[:-1]
+    out_dir = args.inputs[-1]
+    clip, clips = choose_clip(zip_paths, args.label)
+    render_html(clip, clips, out_dir)
     print(
         json.dumps(
             {
                 "selected": clip["title"],
                 "source_label": clip["label"],
                 "variation_score": clip["variation_score"],
-                "out_dir": str(args.out_dir),
+                "out_dir": str(out_dir),
             },
             indent=2,
         )
