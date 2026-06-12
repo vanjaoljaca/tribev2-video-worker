@@ -8,7 +8,7 @@ import time
 import traceback
 import uuid
 import zipfile
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import nullcontext, redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any
 
@@ -321,8 +321,6 @@ def run_prediction(
     job_id: str | None = None,
     include_text: bool = False,
 ) -> dict[str, Any]:
-    ensure_open_stdio()
-    disable_hf_progress()
     output_dir.mkdir(parents=True, exist_ok=True)
     timings: dict[str, float] = {}
     started = time.time()
@@ -385,6 +383,11 @@ def write_results_bundle(job_id: str, summaries: list[dict[str, Any]]) -> None:
     report = render_report(job_id, manifest, previews)
     (results_dir / "report.html").write_text(report, encoding="utf-8")
     zip_dir(results_dir, root / "tribev2-results.zip")
+
+
+def start_job_thread(target, *args) -> None:
+    thread = threading.Thread(target=target, args=args, daemon=True)
+    thread.start()
 
 
 def prediction_preview(preds: np.ndarray) -> dict[str, Any]:
@@ -623,8 +626,6 @@ def process_tiktok_job(
     clip_seconds: float | None,
     include_text: bool,
 ) -> None:
-    ensure_open_stdio()
-    disable_hf_progress()
     root = job_dir(job_id)
     try:
         with JOB_LOCK:
@@ -697,11 +698,11 @@ def process_url_job(
     items: list[dict[str, Any]],
     include_text: bool,
 ) -> None:
-    ensure_open_stdio()
-    disable_hf_progress()
     root = job_dir(job_id)
     try:
-        with JOB_LOCK:
+        update_status(job_id, state="starting", message="Worker thread started")
+        lock_context = JOB_LOCK if len(items) > 1 else nullcontext()
+        with lock_context:
             summaries = []
             failures = []
             total = len(items)
@@ -827,20 +828,56 @@ def pilot_report() -> HTMLResponse:
 
 
 @app.post("/predict_video")
-async def predict_video(file: UploadFile = File(...)) -> JSONResponse:
+async def predict_video(file: UploadFile = File(...), include_text: bool = False) -> JSONResponse:
     ensure_dirs()
     request_id = uuid.uuid4().hex
     root = JOBS_DIR / f"single-{request_id}"
     root.mkdir(parents=True, exist_ok=True)
     suffix = Path(file.filename or "video.mp4").suffix or ".mp4"
     input_path = root / f"input{suffix}"
+    write_json(
+        root / "status.json",
+        {
+            "job_id": f"single-{request_id}",
+            "state": "predicting",
+            "message": "Running TRIBE v2 on uploaded video",
+            "created_at": time.time(),
+            "updated_at": time.time(),
+            "include_text": include_text,
+        },
+    )
     with input_path.open("wb") as f:
         shutil.copyfileobj(file.file, f)
     try:
-        summary = run_prediction(input_path, root / "results")
+        summary = run_prediction(
+            input_path,
+            root / "results" / input_path.stem,
+            job_id=f"single-{request_id}",
+            include_text=include_text,
+        )
+        write_results_bundle(f"single-{request_id}", [summary])
+        update_status(
+            f"single-{request_id}",
+            state="complete",
+            message="Done",
+            download_url=f"/jobs/single-{request_id}/download",
+            report_url=f"/jobs/single-{request_id}/report",
+        )
     except Exception as exc:
+        update_status(
+            f"single-{request_id}",
+            state="error",
+            message=f"{type(exc).__name__}: {exc}",
+        )
         raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}") from exc
-    return JSONResponse({"job_id": f"single-{request_id}", "summary": summary})
+    return JSONResponse(
+        {
+            "job_id": f"single-{request_id}",
+            "summary": summary,
+            "download_url": f"/jobs/single-{request_id}/download",
+            "report_url": f"/jobs/single-{request_id}/report",
+        }
+    )
 
 
 @app.post("/jobs/tiktok")
@@ -865,7 +902,7 @@ def start_tiktok_job(payload: TikTokJobRequest, background_tasks: BackgroundTask
             "include_text": payload.include_text,
         },
     )
-    background_tasks.add_task(
+    start_job_thread(
         process_tiktok_job,
         job_id,
         payload.account_url,
@@ -900,13 +937,42 @@ def start_url_job(payload: UrlJobRequest, background_tasks: BackgroundTasks) -> 
             "include_text": payload.include_text,
         },
     )
-    background_tasks.add_task(
+    update_status(job_id, state="starting", message="Starting worker thread")
+    start_job_thread(
         process_url_job,
         job_id,
         items,
         payload.include_text,
     )
     return {"job_id": job_id, "status_url": f"/jobs/{job_id}"}
+
+
+@app.post("/jobs/urls_sync")
+def run_url_job_sync(payload: UrlJobRequest) -> dict[str, Any]:
+    if not payload.items:
+        raise HTTPException(status_code=400, detail="items must not be empty")
+    if len(payload.items) > 10:
+        raise HTTPException(status_code=400, detail="items must contain at most 10 videos")
+    ensure_dirs()
+    job_id = uuid.uuid4().hex
+    root = job_dir(job_id)
+    root.mkdir(parents=True, exist_ok=True)
+    items = [item.model_dump() for item in payload.items]
+    write_json(
+        root / "status.json",
+        {
+            "job_id": job_id,
+            "state": "queued",
+            "message": "Queued",
+            "items": items,
+            "count": len(items),
+            "created_at": time.time(),
+            "updated_at": time.time(),
+            "include_text": payload.include_text,
+        },
+    )
+    process_url_job(job_id, items, payload.include_text)
+    return read_json(root / "status.json")
 
 
 @app.get("/jobs/{job_id}")
