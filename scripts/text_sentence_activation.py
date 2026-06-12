@@ -7,15 +7,18 @@ import zipfile
 from pathlib import Path
 
 import numpy as np
+from PIL import Image, ImageDraw, ImageFont
 
 
-BANDS = [
-    ("band-1", 12),
-    ("band-2", 44),
-    ("band-3", 90),
-    ("band-4", 145),
-    ("band-5", 205),
-    ("band-6", 275),
+ROUGH_SECTIONS = [
+    ("prefrontal / executive", 12),
+    ("motor / premotor", 42),
+    ("somatosensory / parietal", 82),
+    ("temporal / auditory-language", 128),
+    ("occipital / visual", 188),
+    ("insula / salience-interoception", 232),
+    ("limbic / medial", 286),
+    ("association cortex", 328),
 ]
 
 
@@ -119,11 +122,11 @@ def analyze_clip(zf, dirname, manifest):
     energy = np.mean(np.abs(preds), axis=1)
     signed = np.mean(preds, axis=1)
     vertices = preds.shape[1]
-    split_points = np.linspace(0, vertices, len(BANDS) + 1, dtype=int)
-    band_energy = []
+    split_points = np.linspace(0, vertices, len(ROUGH_SECTIONS) + 1, dtype=int)
+    section_energy = []
     for start, stop in zip(split_points[:-1], split_points[1:]):
-        band_energy.append(np.mean(np.abs(preds[:, start:stop]), axis=1))
-    band_energy = np.asarray(band_energy)
+        section_energy.append(np.mean(np.abs(preds[:, start:stop]), axis=1))
+    section_energy = np.asarray(section_energy)
     rows = []
     for sent in sentence_rows(events):
         lo, hi = window_indices(sent["start"], sent["stop"], len(energy))
@@ -133,15 +136,15 @@ def analyze_clip(zf, dirname, manifest):
         sent_signed = float(np.mean(signed[lo:hi]))
         energy_delta = sent_energy - local_baseline(energy, sent["start"], sent["stop"])
         signed_delta = sent_signed - local_baseline(signed, sent["start"], sent["stop"])
-        band_values = np.mean(band_energy[:, lo:hi], axis=1)
-        band_local = np.asarray(
+        section_values = np.mean(section_energy[:, lo:hi], axis=1)
+        section_local = np.asarray(
             [
-                local_baseline(band_energy[idx], sent["start"], sent["stop"])
-                for idx in range(len(BANDS))
+                local_baseline(section_energy[idx], sent["start"], sent["stop"])
+                for idx in range(len(ROUGH_SECTIONS))
             ]
         )
-        band_delta = band_values - band_local
-        dominant_idx = int(np.argmax(np.abs(band_delta)))
+        section_delta = section_values - section_local
+        dominant_idx = int(np.argmax(np.abs(section_delta)))
         rows.append(
             {
                 "text": sent["text"],
@@ -151,9 +154,18 @@ def analyze_clip(zf, dirname, manifest):
                 "energy_delta": float(energy_delta),
                 "signed": sent_signed,
                 "signed_delta": float(signed_delta),
-                "dominant_band": BANDS[dominant_idx][0],
-                "dominant_hue": BANDS[dominant_idx][1],
-                "dominant_band_delta": float(band_delta[dominant_idx]),
+                "dominant_section": ROUGH_SECTIONS[dominant_idx][0],
+                "dominant_hue": ROUGH_SECTIONS[dominant_idx][1],
+                "dominant_section_delta": float(section_delta[dominant_idx]),
+                "sections": [
+                    {
+                        "name": name,
+                        "hue": hue,
+                        "energy": float(section_values[idx]),
+                        "delta": float(section_delta[idx]),
+                    }
+                    for idx, (name, hue) in enumerate(ROUGH_SECTIONS)
+                ],
             }
         )
     if rows:
@@ -197,9 +209,15 @@ def render_html(clip, all_clips, out_dir):
     payload = {"selected": clip, "ranked_clips": all_clips}
     (out_dir / "sentence_activation.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
+    all_section_values = [
+        section["energy"]
+        for row in rows
+        for section in row["sections"]
+    ]
+    section_lo, section_hi = min(all_section_values), max(all_section_values)
     legend = "".join(
         f'<span class="legend-chip" style="--h:{hue}">{html.escape(name)}</span>'
-        for name, hue in BANDS
+        for name, hue in ROUGH_SECTIONS
     )
     ranked = "\n".join(
         f"<li><code>{html.escape(item['label'])}</code> variation {item['variation_score']:.4f}</li>"
@@ -212,10 +230,22 @@ def render_html(clip, all_clips, out_dir):
         border_hue = 142 if row["signed_delta"] >= 0 else 355
         border_alpha = min(0.95, 0.25 + abs(row["signed_delta"]) / sd_abs * 0.7)
         direction = "up" if row["signed_delta"] >= 0 else "down"
+        stripes = []
+        for section in row["sections"]:
+            section_intensity = norm(section["energy"], section_lo, section_hi)
+            light = 92 - 48 * section_intensity
+            stripe_alpha = 0.28 + 0.72 * section_intensity
+            stripes.append(
+                f'<i title="{html.escape(section["name"])} {section["energy"]:.4f}" '
+                f'style="--h:{section["hue"]};--l:{light:.1f}%;--sa:{stripe_alpha:.3f}"></i>'
+            )
         sentence_html.append(
-            f'''<section class="sentence" style="--h:{row['dominant_hue']};--a:{alpha:.3f};--bh:{border_hue};--ba:{border_alpha:.3f}">
-  <div class="meta"><span>{idx}</span><span>{row['start']:.1f}s-{row['stop']:.1f}s</span><span>{html.escape(row['dominant_band'])}</span><span>{direction} {row['signed_delta']:+.4f}</span><span>intensity {row['energy']:.4f}</span></div>
-  <p>{html.escape(row['text'])}</p>
+            f'''<section class="sentence" style="--bh:{border_hue};--ba:{border_alpha:.3f}">
+  <div class="stripes">{"".join(stripes)}</div>
+  <div class="sentence-content">
+    <div class="meta"><span>{idx}</span><span>{row['start']:.1f}s-{row['stop']:.1f}s</span><span>{html.escape(row['dominant_section'])}</span><span>{direction} {row['signed_delta']:+.4f}</span><span>intensity {row['energy']:.4f}</span></div>
+    <p>{html.escape(row['text'])}</p>
+  </div>
 </section>'''
         )
 
@@ -270,12 +300,41 @@ h1 {{
   font-size: 12px;
 }}
 .sentence {{
-  background: hsla(var(--h), 78%, 66%, var(--a));
+  position: relative;
+  overflow: hidden;
+  background: #ffffff;
   border-left: 9px solid hsla(var(--bh), 72%, 42%, var(--ba));
   border-radius: 8px;
   padding: 12px 14px;
   margin: 10px 0;
   box-shadow: inset 0 0 0 1px rgba(0,0,0,0.08);
+}}
+.stripes {{
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-rows: repeat(8, minmax(3px, 1fr));
+  opacity: 0.86;
+  pointer-events: none;
+}}
+.stripes i {{
+  display: block;
+  background:
+    linear-gradient(
+      90deg,
+      hsla(var(--h), 84%, var(--l), calc(var(--sa) * 0.56)),
+      hsla(var(--h), 84%, calc(var(--l) - 9%), calc(var(--sa) * 0.76)),
+      hsla(var(--h), 84%, var(--l), calc(var(--sa) * 0.56))
+    );
+  border-bottom: 1px solid rgba(255,255,255,0.2);
+}}
+.sentence-content {{
+  position: relative;
+  z-index: 1;
+  background: rgba(255,255,255,0.62);
+  border-radius: 6px;
+  padding: 9px 10px;
+  backdrop-filter: blur(1px);
 }}
 .sentence p {{
   margin: 8px 0 0;
@@ -308,9 +367,9 @@ code {{
 <body>
 <main>
   <h1>Sentence Activation Text Map</h1>
-  <p class="sub">Selected clip: <code>{html.escape(clip['label'])}</code>. Background strength is sentence-level activation intensity. Left border is signed movement versus local baseline: green up, red down. Hue is the dominant coarse vertex band, not an anatomical atlas label.</p>
+  <p class="sub">Selected clip: <code>{html.escape(clip['label'])}</code>. Each sentence has eight thin horizontal section stripes behind the text; each stripe brightens/darkens by that rough section's predicted activation. Left border is signed movement versus local baseline: green up, red down. These are rough cortical sections, not atlas-verified ROI labels.</p>
   <div class="panel">
-    <strong>Vertex-band hue legend</strong>
+    <strong>Rough section hue legend</strong>
     <div class="legend">{legend}</div>
   </div>
   <div class="panel">
@@ -323,6 +382,103 @@ code {{
 </html>
 """
     (out_dir / "sentence_activation.html").write_text(doc, encoding="utf-8")
+    render_png(clip, out_dir / "sentence_activation_preview.png")
+
+
+def hsl_to_rgb(h, s=0.74, l=0.72):
+    import colorsys
+
+    r, g, b = colorsys.hls_to_rgb((h % 360) / 360.0, l, s)
+    return int(r * 255), int(g * 255), int(b * 255)
+
+
+def load_font(size, bold=False):
+    candidates = [
+        "/System/Library/Fonts/SFNS.ttf",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/Library/Fonts/Arial.ttf",
+    ]
+    for path in candidates:
+        try:
+            return ImageFont.truetype(path, size=size)
+        except Exception:
+            pass
+    return ImageFont.load_default()
+
+
+def wrap_text(draw, text, font, width):
+    words = text.split()
+    lines = []
+    current = ""
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        if draw.textbbox((0, 0), candidate, font=font)[2] <= width or not current:
+            current = candidate
+        else:
+            lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
+    return lines
+
+
+def render_png(clip, out_path):
+    rows = clip["rows"]
+    if not rows:
+        return
+    all_section_values = [section["energy"] for row in rows for section in row["sections"]]
+    section_lo, section_hi = min(all_section_values), max(all_section_values)
+    signed_deltas = np.asarray([row["signed_delta"] for row in rows])
+    sd_abs = float(max(abs(np.min(signed_deltas)), abs(np.max(signed_deltas)), 1e-9))
+
+    width = 1200
+    margin = 48
+    stripe_h = 5
+    stripe_gap = 1
+    card_gap = 14
+    text_font = load_font(23)
+    meta_font = load_font(14)
+    title_font = load_font(30, bold=True)
+    line_h = 32
+
+    scratch = Image.new("RGB", (width, 200), "white")
+    draw = ImageDraw.Draw(scratch)
+    cards = []
+    for row in rows:
+        lines = wrap_text(draw, row["text"], text_font, width - margin * 2 - 42)
+        height = 28 + (stripe_h + stripe_gap) * len(ROUGH_SECTIONS) + 14 + len(lines) * line_h + 18
+        cards.append((row, lines, height))
+    height = margin + 48 + 42 + sum(card[2] + card_gap for card in cards) + margin
+    img = Image.new("RGB", (width, height), (247, 247, 242))
+    draw = ImageDraw.Draw(img)
+    y = margin
+    draw.text((margin, y), "Sentence Activation Text Map", fill=(22, 22, 18), font=title_font)
+    y += 42
+    draw.text((margin, y), f"Selected: {clip['label']}  |  stripes = rough cortical sections, brightness = activation", fill=(70, 70, 62), font=meta_font)
+    y += 34
+
+    for row, lines, card_h in cards:
+        x = margin
+        card_w = width - margin * 2
+        border_color = (23, 132, 72) if row["signed_delta"] >= 0 else (179, 45, 64)
+        border_scale = min(1.0, 0.25 + abs(row["signed_delta"]) / sd_abs * 0.75)
+        border_color = tuple(int(230 * (1 - border_scale) + c * border_scale) for c in border_color)
+        draw.rounded_rectangle((x, y, x + card_w, y + card_h), radius=10, fill=(255, 255, 255), outline=(218, 218, 210), width=1)
+        draw.rounded_rectangle((x, y, x + 10, y + card_h), radius=8, fill=border_color)
+        sy = y + 14
+        for section in row["sections"]:
+            intensity = norm(section["energy"], section_lo, section_hi)
+            rgb = hsl_to_rgb(section["hue"], l=0.90 - 0.42 * intensity)
+            draw.rectangle((x + 20, sy, x + card_w - 16, sy + stripe_h), fill=rgb)
+            sy += stripe_h + stripe_gap
+        meta = f"{row['start']:.1f}-{row['stop']:.1f}s | {row['dominant_section']} | signed {row['signed_delta']:+.4f} | intensity {row['energy']:.4f}"
+        draw.text((x + 22, sy + 6), meta, fill=(48, 48, 42), font=meta_font)
+        ty = sy + 28
+        for line in lines:
+            draw.text((x + 22, ty), line, fill=(20, 20, 17), font=text_font)
+            ty += line_h
+        y += card_h + card_gap
+    img.save(out_path)
 
 
 def main():
